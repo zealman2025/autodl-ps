@@ -1,0 +1,569 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 12px;
+    line-height: 1.2;
+    background-color: var(--uxp-host-background-color, #1e1e1e);
+    color: var(--uxp-host-text-color, #ffffff);
+    overflow: hidden;
+    padding: 0;
+    height: 100vh;
+    margin: 0;
+}
+
+#root {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+}
+
+.app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100%;
+    overflow: hidden;
+}
+
+.container {
+    padding: 8px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    box-sizing: border-box;
+    overflow-y: auto;
+    line-height: 1.2;
+}
+
+/* TAB 导航样式 */
+.sp-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: row;
+    border-bottom: 2px solid var(--uxp-host-border-color, rgba(255, 255, 255, 0.2));
+    margin: 8px 8px 0 8px;
+    height: 30px;
+    line-height: 1.2;
+}
+
+.sp-tab {
+    width: 60px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.sp-tab:hover {
+    opacity: 0.8;
+}
+
+.sp-tab.selected {
+    border-bottom: 2px solid var(--uxp-host-text-color, #ffffff);
+    margin-bottom: -2px;
+}
+
+/* TAB 页面样式 */
+.sp-tab-page {
+    display: none;
+    flex: 1 1 auto;
+    overflow: auto;
+    margin: 8px;
+    height: calc(100vh - 80px);
+}
+
+.sp-tab-page.visible {
+    display: block;
+    overflow-y: auto;
+}
+
+.sp-tab-page.visible.logs-page-simple {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 80px);
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
+.form-group {
+    margin-bottom: 8px;
+    line-height: 1.2;
+}
+
+label {
+    display: block;
+    margin-bottom: 2px;
+    margin-top: 0;
+    padding: 0;
+    font-weight: 500;
+    color: var(--uxp-host-text-color, #e0e0e0);
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+textarea {
+    width: 100%;
+    min-height: 100px;
+    padding: 6px;
+    margin: 0;
+    color: var(--uxp-host-text-color, #ffffff);
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.3;
+    resize: vertical;
+}
+
+textarea:hover:not(:disabled) {
+}
+
+textarea:focus {
+    outline: none;
+}
+
+textarea:disabled {
+    opacity: 0.6;
+}
+
+input[type="number"],
+input[type="text"] {
+    width: 100%;
+    padding: 6px;
+    margin: 0;
+    color: var(--uxp-host-text-color, #ffffff);
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+input[type="number"]:hover:not(:disabled),
+input[type="text"]:hover:not(:disabled) {
+
+}
+
+input[type="number"]:focus,
+input[type="text"]:focus {
+    outline: none;
+}
+
+input[type="number"]:disabled,
+input[type="text"]:disabled {
+    opacity: 0.6;
+}
+
+select {
+    width: 100%;
+    padding: 6px;
+    margin: 0;
+    color: var(--uxp-host-text-color, #ffffff);
+    font-size: 12px;
+    line-height: 1.2;
+    cursor: pointer;
+}
+
+select:hover:not(:disabled) {
+}
+
+select:focus {
+    outline: none;
+}
+
+select:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+button {
+    width: 100%;
+    padding: 8px;
+    margin: 0;
+    background-color: #007acc;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+button:hover:not(:disabled) {
+    background-color: #005a9e;
+}
+
+button:disabled {
+    background-color: rgba(255, 255, 255, 0.1);
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.log-content-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    font-size: 12px;
+    line-height: 1.3;
+    margin: 8px;
+    color: var(--uxp-host-text-color, #ffffff);
+    background-color: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    user-select: text;
+}
+
+.log-entry {
+    margin-bottom: 2px;
+    word-wrap: break-word;
+    user-select: text;
+    cursor: text;
+    line-height: 1.3;
+}
+
+.log-entry.error {
+    color: #ff6b6b;
+}
+
+.log-entry.success {
+    color: #51cf66;
+}
+
+.log-entry.info {
+    color: #74c0fc;
+}
+
+.status {
+    margin-top: 8px;
+    padding: 6px;
+    border-radius: 4px;
+    text-align: center;
+    font-weight: 500;
+    font-size: 12px;
+}
+
+.status.processing {
+    background-color: rgba(116, 192, 252, 0.2);
+    color: #74c0fc;
+}
+
+.status.success {
+    background-color: rgba(81, 207, 102, 0.2);
+    color: #51cf66;
+}
+
+.status.error {
+    background-color: rgba(255, 107, 107, 0.2);
+    color: #ff6b6b;
+}
+
+.progress-panel {
+    margin-top: 6px;
+    margin-bottom: 6px;
+    padding: 8px;
+    background-color: var(--uxp-host-background-color, #1a1a1a);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    line-height: 1.2;
+}
+
+.progress-bar-bg {
+    width: 100%;
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 8px;
+    margin-top: 0;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    /* UXP不支持transition，已移除 */
+}
+
+.log-buttons-bottom {
+    flex: 0 0 auto;
+    display: flex;
+    background-color: var(--uxp-host-background-color, #1e1e1e);
+    border-top: 1px solid var(--uxp-host-border-color, rgba(255, 255, 255, 0.2));
+    padding: 8px;
+    align-items: center;
+    line-height: 1.2;
+}
+
+/* ============================================
+   常用组件样式 - UXP兼容版本
+   ============================================ */
+
+/* 页面标题 */
+.page-title {
+    margin-bottom: 6px;
+    margin-top: 0;
+    padding: 0;
+    color: var(--uxp-host-text-color, #e0e0e0);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.page-title-large {
+    margin-bottom: 12px;
+    margin-top: 0;
+    padding: 0;
+    color: var(--uxp-host-text-color, #e0e0e0);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+/* 信息框 */
+.info-box {
+    padding: 6px 8px;
+    background-color: rgba(116, 192, 252, 0.1);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--uxp-host-text-color, #ffffff);
+    line-height: 1.3;
+    word-break: break-all;
+}
+
+.info-box-secondary {
+    padding: 8px;
+    background-color: rgba(116, 192, 252, 0.1);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--uxp-host-text-color-secondary, #a0a0a0);
+    line-height: 1.4;
+}
+
+.info-box-large {
+    margin-top: 16px;
+    padding: 12px;
+    background-color: rgba(116, 192, 252, 0.1);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--uxp-host-text-color-secondary, #a0a0a0);
+    line-height: 1.4;
+}
+
+/* 辅助文本 */
+.help-text {
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--uxp-host-text-color-secondary, #a0a0a0);
+    line-height: 1.2;
+}
+
+.help-text-medium {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--uxp-host-text-color-secondary, #a0a0a0);
+    line-height: 1.3;
+}
+
+/* 按钮组 */
+.button-group {
+    display: flex;
+    margin-bottom: 6px;
+    margin-top: 0;
+}
+
+.button-group-spaced {
+    display: flex;
+    margin-bottom: 8px;
+}
+
+.button-group-bottom {
+    margin-top: 16px;
+    display: flex;
+    margin-bottom: 0;
+}
+
+/* 按钮变体 */
+.button-primary {
+    margin-right: 6px;
+    flex: 1;
+}
+
+.button-danger {
+    background-color: #d32f2f;
+    flex: 0 0 auto;
+    width: auto;
+    padding: 8px 12px;
+}
+
+.button-log {
+    border: none;
+    height: 24px;
+    line-height: 24px;
+    padding: 0 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    min-width: 56px;
+    width: auto;
+}
+
+.button-log-secondary {
+    background-color: #4b4b4b;
+    color: #ffffff;
+    margin-right: 4px;
+}
+
+.button-log-primary {
+    background-color: #1473e6;
+    color: #ffffff;
+}
+
+/* 表单行（用于并排的表单元素） */
+.form-row {
+    display: flex;
+    margin-bottom: 8px;
+}
+
+.form-group-inline {
+    margin-bottom: 0;
+    margin-right: 8px;
+    flex: 1;
+}
+
+.form-group-inline:last-child {
+    margin-right: 0;
+}
+
+/* 复选框标签 */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.checkbox-label.disabled {
+    cursor: not-allowed;
+}
+
+.checkbox-label input[type="checkbox"] {
+    margin-right: 6px;
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    accent-color: #007acc;
+}
+
+.checkbox-label.disabled input[type="checkbox"] {
+    cursor: not-allowed;
+}
+
+.checkbox-label span {
+    font-size: 12px;
+    color: var(--uxp-host-text-color, #e0e0e0);
+    line-height: 1.2;
+}
+
+.checkbox-label.disabled span {
+    color: var(--uxp-host-text-color-secondary, #a0a0a0);
+}
+
+/* TAB标签文本 */
+.tab-text {
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.tab-text.active {
+    color: var(--uxp-host-text-color, #ffffff);
+}
+
+.tab-text.inactive {
+    color: var(--uxp-host-text-color-secondary, #a0a0a0);
+}
+
+/* 进度条标签 */
+.progress-label {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    margin-top: 0;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--uxp-host-text-color, #a0a0a0);
+    line-height: 1.2;
+}
+
+/* 进度条填充 */
+.progress-bar-fill.workflow {
+    background: linear-gradient(to right, #2563eb, #7c3aed);
+}
+
+.progress-bar-fill.node {
+    background: linear-gradient(to right, #10b981, #3b82f6);
+}
+
+/* 状态消息 */
+.status-message {
+    margin-top: 6px;
+    padding: 6px;
+}
+
+.status-message-large {
+    margin-top: 12px;
+    padding: 6px;
+}
+
+/* 日志时间戳 */
+.log-timestamp {
+    opacity: 0.6;
+}
+
+.log-type-label {
+    opacity: 0.8;
+}
+
+/* 日志空状态 */
+.log-empty {
+    color: #67c797;
+}
+
+/* 信息框内容 */
+.info-box-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--uxp-host-text-color, #e0e0e0);
+}
+
+.info-box-item {
+    margin-bottom: 4px;
+}
+
+.info-box-item:last-child {
+    margin-bottom: 0;
+}
+
+.info-box-highlight {
+    color: var(--uxp-host-text-color, #ffffff);
+    font-weight: 500;
+}
+
+/* 应用容器 */
+.app-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* TAB页面 */
+.tab-page {
+    flex: 1 1 auto;
+    overflow: auto;
+    margin: 8px;
+    height: calc(100vh - 80px);
+    display: block;
+    line-height: 1.2;
+}
