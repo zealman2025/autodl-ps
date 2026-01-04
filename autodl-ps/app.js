@@ -213,7 +213,7 @@ class AutoDLAPI {
         }
     }
 
-    async generate(text, batchSize = 1, signal, psUtils, zImageParams) {
+    async generate(text, batchSize = 1, signal, psUtils) {
         try {
             let payload;
             if (this.apiType === 'qwenbg') {
@@ -221,9 +221,6 @@ class AutoDLAPI {
                 const { file, filename } = await this.exportPhotoshopImage(psUtils);
                 const uploadedFilename = await this.uploadImage(file, filename, signal);
                 payload = { workflow_id: 'qwenbg', input_values: { '319:image': uploadedFilename, '498:seed': 133337086798617 }, client_id: this.clientId };
-            } else if (this.apiType === 'Z-Image') {
-                if (!zImageParams) throw new Error('Z-Image API需要额外参数');
-                payload = { workflow_id: 'Z-Image', input_values: { '141:seed': zImageParams.seed, '216:batch_size': batchSize, '376:value': zImageParams.width, '377:value': zImageParams.height, '544:text': text }, client_id: this.clientId };
             } else {
                 const seed = Math.floor(Date.now() * 1000 + Math.random() * 1000000);
                 payload = { workflow_id: '07Nunchaku-Qwenimage', input_values: { '3:seed': seed, '6:text': text, '58:batch_size': batchSize }, client_id: this.clientId };
@@ -235,11 +232,6 @@ class AutoDLAPI {
                 this.addLog('info', `提示词: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`);
                 this.addLog('info', `批次大小: ${batchSize}`);
                 this.addLog('info', `Seed: ${payload.input_values['3:seed']}`);
-            } else if (this.apiType === 'Z-Image') {
-                this.addLog('info', `提示词: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`);
-                this.addLog('info', `尺寸: ${payload.input_values['376:value']}x${payload.input_values['377:value']}`);
-                this.addLog('info', `批次大小: ${batchSize}`);
-                this.addLog('info', `Seed: ${payload.input_values['141:seed']}`);
             } else {
                 this.addLog('info', `输入图像: ${payload.input_values['319:image']}`);
                 this.addLog('info', `Seed: ${payload.input_values['498:seed']}`);
@@ -511,9 +503,6 @@ let state = {
     apiEndpoint: '',
     apiType: '07Nunchaku-Qwenimage',
     isGenerating: false,
-    zImageWidth: 1280,
-    zImageHeight: 720,
-    zImageSeed: 453236349928716,
     logs: [],
     status: '',
     statusType: 'processing',
@@ -522,7 +511,9 @@ let state = {
     workflowProgress: 0,
     nodeProgress: 0,
     currentNode: '准备中...',
-    showProgress: false
+    showProgress: false,
+    apiServerStatus: 'unknown', // 'online', 'offline', 'checking', 'unknown'
+    comfyuiStatus: 'unknown' // 'online', 'offline', 'checking', 'unknown'
 };
 
 let abortControllerRef = null;
@@ -530,19 +521,20 @@ let apiRef = null;
 let psUtilsRef = null;
 
 // 初始化
-function init() {
-    // 从localStorage加载保存的配置
+async function init() {
+    console.log('初始化开始，当前 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+    
+    // 从 JSON 文件加载保存的配置
     try {
-        const savedEndpoint = localStorage.getItem('autodl_api_endpoint');
-        if (savedEndpoint) {
-            state.apiEndpoint = savedEndpoint;
-        }
-        const savedApiType = localStorage.getItem('autodl_api_type');
-        if (savedApiType && (savedApiType === '07Nunchaku-Qwenimage' || savedApiType === 'qwenbg' || savedApiType === 'Z-Image')) {
-            state.apiType = savedApiType;
+        const loaded = await loadSettingsFromFile();
+        if (loaded) {
+            console.log('配置已从 JSON 文件加载，当前 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+        } else {
+            console.log('未找到配置文件，使用默认配置');
         }
     } catch (e) {
-        // localStorage可能不可用，忽略
+        console.error('从文件系统加载配置失败:', e);
+        console.error('加载失败时的 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
     }
 
     // 初始化默认提示词
@@ -550,9 +542,17 @@ function init() {
         state.text = DEFAULT_PROMPT;
     }
 
+
+    console.log('初始化完成，最终 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+
     // 初始化 API 和 Photoshop 工具实例
     initAPI();
     initPhotoshopUtils();
+
+    // 检查 API 服务器状态
+    if (state.apiEndpoint && state.apiEndpoint.trim()) {
+        checkApiServerStatus();
+    }
 
     // 渲染界面
     render();
@@ -579,6 +579,135 @@ function initAPI() {
             }
         }
     );
+}
+
+// 检查 ComfyUI 状态
+async function checkComfyUIStatus() {
+    if (!state.apiEndpoint || !state.apiEndpoint.trim()) {
+        state.comfyuiStatus = 'unknown';
+        render();
+        return;
+    }
+
+    state.comfyuiStatus = 'checking';
+    render();
+
+    try {
+        const baseUrl = state.apiEndpoint.replace(/\/$/, '');
+        // ComfyUI 的常用检查端点（按优先级排序）
+        const endpoints = [
+            `${baseUrl}/api/object_info`, // 对象信息（节点信息）- 最可靠的端点
+            `${baseUrl}/api/system_stats`, // 系统统计
+            `${baseUrl}/api/prompts` // 提示词列表
+        ];
+        
+        let isComfyUIOnline = false;
+
+        // 尝试每个端点，使用独立的超时控制
+        for (const endpoint of endpoints) {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
+                
+                const response = await fetch(endpoint, {
+                    method: 'GET',
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                // ComfyUI 的 API 通常返回 JSON，状态码 200 表示成功
+                if (response.ok) {
+                    const contentType = response.headers.get('content-type');
+                    // 如果返回 JSON，说明是 ComfyUI API
+                    if (contentType && contentType.includes('application/json')) {
+                        isComfyUIOnline = true;
+                        break;
+                    }
+                }
+            } catch (e) {
+                // 继续尝试下一个端点
+                continue;
+            }
+        }
+
+        state.comfyuiStatus = isComfyUIOnline ? 'online' : 'offline';
+    } catch (error) {
+        // 任何错误都视为离线
+        state.comfyuiStatus = 'offline';
+    }
+    render();
+}
+
+// 检查 API 服务器状态
+async function checkApiServerStatus() {
+    if (!state.apiEndpoint || !state.apiEndpoint.trim()) {
+        state.apiServerStatus = 'unknown';
+        render();
+        return;
+    }
+
+    state.apiServerStatus = 'checking';
+    render();
+
+    try {
+        const baseUrl = state.apiEndpoint.replace(/\/$/, '');
+        // 尝试访问 API 的健康检查端点或根路径
+        const healthCheckUrl = `${baseUrl}/api/health`;
+        const rootUrl = `${baseUrl}/`;
+        
+        // 使用较短的超时时间（3秒）
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+        let isOnline = false;
+
+        try {
+            // 先尝试健康检查端点
+            const response = await fetch(healthCheckUrl, {
+                method: 'GET',
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            
+            if (response.ok || response.status < 500) {
+                isOnline = true;
+            }
+        } catch (e) {
+            clearTimeout(timeoutId);
+            // 如果健康检查失败，尝试根路径
+            try {
+                const rootController = new AbortController();
+                const rootTimeoutId = setTimeout(() => rootController.abort(), 3000);
+                const rootResponse = await fetch(rootUrl, {
+                    method: 'GET',
+                    signal: rootController.signal
+                });
+                clearTimeout(rootTimeoutId);
+                
+                if (rootResponse.ok || rootResponse.status < 500) {
+                    isOnline = true;
+                }
+            } catch (rootError) {
+                // 两个请求都失败，服务器离线
+                isOnline = false;
+            }
+        }
+
+        state.apiServerStatus = isOnline ? 'online' : 'offline';
+        
+        // 如果 API 服务器在线，检查 ComfyUI 状态
+        if (isOnline) {
+            await checkComfyUIStatus();
+        } else {
+            state.comfyuiStatus = 'offline';
+        }
+    } catch (error) {
+        // 任何错误都视为离线
+        state.apiServerStatus = 'offline';
+        state.comfyuiStatus = 'offline';
+    }
+    render();
 }
 
 // 初始化 Photoshop 工具实例
@@ -660,7 +789,7 @@ async function handleGenerate() {
     }
 
     // 对于需要提示词的API，需要检查提示词
-    if ((state.apiType === '07Nunchaku-Qwenimage' || state.apiType === 'Z-Image') && !state.text.trim()) {
+    if (state.apiType === '07Nunchaku-Qwenimage' && !state.text.trim()) {
         addLog('error', '请输入提示词');
         return;
     }
@@ -682,12 +811,7 @@ async function handleGenerate() {
             state.text,
             state.batchSize,
             abortControllerRef.signal,
-            psUtilsRef,
-            {
-                width: state.zImageWidth,
-                height: state.zImageHeight,
-                seed: state.zImageSeed
-            }
+            psUtilsRef
         );
 
         addLog('success', 'API调用成功，开始处理图像...');
@@ -776,23 +900,233 @@ function handleCancel() {
     }
 }
 
-// 保存配置
-function saveSettings() {
+// 保存配置到 JSON 文件
+async function saveSettingsToFile() {
     try {
-        localStorage.setItem('autodl_api_endpoint', state.apiEndpoint);
-        localStorage.setItem('autodl_api_type', state.apiType);
-        addLog('success', '配置已保存');
+        console.log('开始保存配置到文件:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+        
+        const uxp = require('uxp');
+        const fs = uxp.storage.localFileSystem;
+        const dataFolder = await fs.getDataFolder();
+        console.log('数据文件夹获取成功');
+        
+        const configData = {
+            apiEndpoint: state.apiEndpoint || '',
+            apiType: state.apiType || '07Nunchaku-Qwenimage',
+            timestamp: Date.now()
+        };
+        
+        console.log('准备写入配置数据:', configData);
+        const jsonContent = JSON.stringify(configData, null, 2);
+        console.log('JSON 内容:', jsonContent);
+        
+        const configFile = await dataFolder.createFile('autodl-config.json', { overwrite: true });
+        await configFile.write(jsonContent, { format: uxp.storage.formats.utf8 });
+        console.log('文件写入完成');
+        
+        // 验证保存是否成功
+        const verifyFile = await dataFolder.getEntry('autodl-config.json');
+        if (verifyFile && verifyFile.isFile) {
+            const verifyContent = await verifyFile.read({ format: uxp.storage.formats.utf8 });
+            console.log('验证读取的内容:', verifyContent);
+            const verifyData = JSON.parse(verifyContent);
+            console.log('验证解析的数据:', verifyData);
+            
+            if (verifyData.apiEndpoint === configData.apiEndpoint && verifyData.apiType === configData.apiType) {
+                const filePath = verifyFile.nativePath || verifyFile.name || 'autodl-config.json';
+                console.log('配置保存验证成功，文件路径:', filePath);
+                return { success: true, filePath: filePath };
+            } else {
+                console.error('验证失败 - 期望:', configData, '实际:', verifyData);
+                throw new Error(`保存后验证失败: 期望 apiEndpoint=${configData.apiEndpoint}, 实际=${verifyData.apiEndpoint}`);
+            }
+        } else {
+            throw new Error('验证文件不存在');
+        }
+    } catch (e) {
+        console.error('保存配置到文件系统失败:', e);
+        console.error('错误堆栈:', e.stack);
+        throw e;
+    }
+}
+
+// 从 JSON 文件加载配置
+async function loadSettingsFromFile() {
+    try {
+        const uxp = require('uxp');
+        const fs = uxp.storage.localFileSystem;
+        const dataFolder = await fs.getDataFolder();
+        const configFile = await dataFolder.getEntry('autodl-config.json');
+        if (configFile && configFile.isFile) {
+            const content = await configFile.read({ format: uxp.storage.formats.utf8 });
+            console.log('读取配置文件内容:', content);
+            const configData = JSON.parse(content);
+            console.log('解析后的配置数据:', configData);
+            
+            let loaded = false;
+            if (configData.apiEndpoint !== undefined && configData.apiEndpoint !== null) {
+                state.apiEndpoint = String(configData.apiEndpoint).trim();
+                console.log('加载 API 端点:', state.apiEndpoint);
+                loaded = true;
+            }
+            if (configData.apiType && (configData.apiType === '07Nunchaku-Qwenimage' || configData.apiType === 'qwenbg')) {
+                state.apiType = configData.apiType;
+                console.log('加载 API 类型:', state.apiType);
+                loaded = true;
+            }
+            
+            if (loaded) {
+                console.log('配置加载成功:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+            }
+            return loaded;
+        } else {
+            console.log('配置文件不存在');
+        }
+    } catch (e) {
+        // 文件不存在或其他错误，记录详细信息
+        console.error('从文件系统加载配置失败:', e);
+        console.error('错误堆栈:', e.stack);
+    }
+    return false;
+}
+
+// 标准化 API 服务器地址
+function normalizeApiEndpoint(url) {
+    if (!url || !url.trim()) {
+        return '';
+    }
+
+    let normalized = url.trim();
+
+    // 移除末尾的斜杠
+    normalized = normalized.replace(/\/+$/, '');
+
+    // 如果包含路径（如 /api/workflow/generate），提取基础URL
+    try {
+        // 如果没有协议，先添加 https:// 以便解析
+        let urlToParse = normalized;
+        if (!normalized.match(/^https?:\/\//i)) {
+            urlToParse = 'https://' + normalized;
+        }
+
+        const urlObj = new URL(urlToParse);
+        // 只保留协议、主机名和端口
+        normalized = urlObj.protocol + '//' + urlObj.host;
+    } catch (e) {
+        // 如果URL解析失败，尝试手动处理
+        // 移除路径部分（从第一个斜杠开始的所有内容，但保留端口号）
+        const pathMatch = normalized.match(/^([^\/]+)(\/.*)?$/);
+        if (pathMatch) {
+            normalized = pathMatch[1];
+        }
+        
+        // 如果没有协议，添加 https://
+        if (!normalized.match(/^https?:\/\//i)) {
+            normalized = 'https://' + normalized;
+        }
+    }
+
+    // 确保末尾没有斜杠
+    normalized = normalized.replace(/\/+$/, '');
+
+    return normalized;
+}
+
+// 处理 API 端点输入框变化
+function handleEndpointInputChange(inputElement) {
+    const originalValue = inputElement.value || '';
+    const normalizedValue = normalizeApiEndpoint(originalValue);
+    
+    // 如果值被修正了，更新输入框和state
+    if (originalValue !== normalizedValue && normalizedValue) {
+        state.apiEndpoint = normalizedValue;
+        inputElement.value = normalizedValue;
+        addLog('info', `地址已自动修正为: ${normalizedValue}`);
+        render();
+    } else {
+        state.apiEndpoint = originalValue;
+        render();
+    }
+}
+
+
+// 保存配置
+async function saveSettings() {
+    try {
+        // 从输入框直接读取当前值，确保保存的是用户实际输入的值
+        const endpointInput = document.getElementById('settings-api-endpoint-input');
+        const apiTypeSelect = document.getElementById('settings-api-type-select');
+        
+        console.log('保存前 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+        
+        if (endpointInput) {
+            const inputValue = endpointInput.value || '';
+            console.log('从输入框读取的值:', inputValue);
+            // 标准化地址格式
+            const normalizedValue = normalizeApiEndpoint(inputValue);
+            state.apiEndpoint = normalizedValue;
+            // 如果地址被修正了，更新输入框显示
+            if (normalizedValue !== inputValue.trim() && normalizedValue) {
+                endpointInput.value = normalizedValue;
+                addLog('info', `地址已自动修正为: ${normalizedValue}`);
+            }
+        } else {
+            console.warn('未找到 API 端点输入框');
+        }
+        
+        if (apiTypeSelect) {
+            state.apiType = apiTypeSelect.value || '07Nunchaku-Qwenimage';
+            console.log('从选择框读取的值:', state.apiType);
+        } else {
+            console.warn('未找到 API 类型选择框');
+        }
+
+        console.log('保存时 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+
+        // 验证必填字段
+        if (!state.apiEndpoint || !state.apiEndpoint.trim()) {
+            addLog('error', 'API 服务器地址不能为空');
+            state.status = '保存失败：API 服务器地址不能为空';
+            state.statusType = 'error';
+            render();
+            return;
+        }
+
+        addLog('info', `准备保存配置: API端点=${state.apiEndpoint}, API类型=${state.apiType}`);
+        
+        const result = await saveSettingsToFile();
+        if (!result || !result.success) {
+            throw new Error('保存配置失败');
+        }
+
+        // 保存成功后，确保 state 保持正确的值
+        console.log('保存成功后 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
+        
+        addLog('success', '配置已保存到 JSON 文件');
+        addLog('info', `文件路径: ${result.filePath}`);
+        addLog('info', `API端点: ${state.apiEndpoint}`);
+        addLog('info', `API类型: ${state.apiType}`);
         state.status = '配置已保存';
         state.statusType = 'success';
+        
+        // 重新初始化 API（这会使用更新后的 state）
+        initAPI();
+        
+        // 检查 API 服务器状态
+        checkApiServerStatus();
+        
         setTimeout(() => {
             state.status = '';
             render();
         }, 2000);
-        initAPI(); // 重新初始化 API
     } catch (e) {
-        addLog('error', '保存配置失败');
-        state.status = '保存失败';
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        addLog('error', `保存配置失败: ${errorMessage}`);
+        addLog('error', `错误堆栈: ${e.stack || '无堆栈信息'}`);
+        state.status = `保存失败: ${errorMessage}`;
         state.statusType = 'error';
+        console.error('保存配置失败:', e);
+        console.error('保存失败时的 state:', { apiEndpoint: state.apiEndpoint, apiType: state.apiType });
     }
     render();
 }
@@ -800,6 +1134,10 @@ function saveSettings() {
 // 切换标签页
 function setActiveTab(tab) {
     state.activeTab = tab;
+    // 切换到首页时检查 API 服务器状态和 ComfyUI 状态
+    if (tab === 'main' && state.apiEndpoint && state.apiEndpoint.trim()) {
+        checkApiServerStatus();
+    }
     render();
 }
 
@@ -859,7 +1197,11 @@ function render() {
             } else if (action === 'copyLogs') {
                 copyLogs();
             } else if (action === 'saveSettings') {
-                saveSettings();
+                saveSettings().catch(error => {
+                    console.error('保存设置时发生未处理的错误:', error);
+                    addLog('error', `保存设置失败: ${error.message || String(error)}`);
+                    render();
+                });
             }
         });
     });
@@ -870,15 +1212,16 @@ function renderMainTab() {
     return `
         <div class="sp-tab-page visible tab-page">
             <div class="container">
-                <h2 class="page-title">AutoDL PS</h2>
-                
                 <div class="form-group">
-                    <label>当前 API 服务器</label>
-                    <div class="info-box">
-                        ${state.apiEndpoint || '未设置'}
-                    </div>
-                    <div class="help-text">
-                        在"设置"页面可以修改 API 服务器配置
+                    <div class="status-row">
+                        <div class="status-item">
+                            <span class="status-label">服务器：</span>
+                            <span class="api-status-indicator ${state.apiServerStatus}"></span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">ComfyUI：</span>
+                            <span class="api-status-indicator ${state.comfyuiStatus}"></span>
+                        </div>
                     </div>
                 </div>
 
@@ -887,13 +1230,11 @@ function renderMainTab() {
                     <select id="api-type-select" ${state.isGenerating ? 'disabled' : ''} onchange="state.apiType = this.value; render();">
                         <option value="07Nunchaku-Qwenimage" ${state.apiType === '07Nunchaku-Qwenimage' ? 'selected' : ''}>07Nunchaku-Qwenimage</option>
                         <option value="qwenbg" ${state.apiType === 'qwenbg' ? 'selected' : ''}>qwenbg</option>
-                        <option value="Z-Image" ${state.apiType === 'Z-Image' ? 'selected' : ''}>Z-Image</option>
                     </select>
                 </div>
 
                 ${state.apiType === '07Nunchaku-Qwenimage' ? renderQwenImageFields() : ''}
                 ${state.apiType === 'qwenbg' ? renderQwenbgFields() : ''}
-                ${state.apiType === 'Z-Image' ? renderZImageFields() : ''}
 
                 <div class="form-group">
                     <label class="checkbox-label ${state.isGenerating ? 'disabled' : ''}">
@@ -903,7 +1244,7 @@ function renderMainTab() {
                 </div>
 
                 <div class="button-group">
-                    <button data-action="generate" ${state.isGenerating || ((state.apiType === '07Nunchaku-Qwenimage' || state.apiType === 'Z-Image') && !state.text.trim()) ? 'disabled' : ''} class="button-primary">
+                    <button data-action="generate" ${state.isGenerating || (state.apiType === '07Nunchaku-Qwenimage' && !state.text.trim()) ? 'disabled' : ''} class="button-primary">
                         ${state.isGenerating ? '生成中...' : '生成'}
                     </button>
                     ${state.isGenerating ? `<button data-action="cancel" class="button-danger">取消</button>` : ''}
@@ -942,35 +1283,6 @@ function renderQwenbgFields() {
     `;
 }
 
-// 渲染 Z-Image 字段
-function renderZImageFields() {
-    return `
-        <div class="form-group">
-            <label for="z-image-text-input">提示词 (544:text)</label>
-            <textarea id="z-image-text-input" ${state.isGenerating ? 'disabled' : ''} onchange="state.text = this.value; render();" placeholder="输入提示词，例如：镜中自拍的少女，双马尾垂落肩头...">${state.text}</textarea>
-        </div>
-        <div class="form-row">
-            <div class="form-group form-group-inline">
-                <label for="z-image-width-input">宽度 (376:value)</label>
-                <input id="z-image-width-input" type="number" min="1" max="4096" value="${state.zImageWidth}" ${state.isGenerating ? 'disabled' : ''} onchange="state.zImageWidth = parseInt(this.value) || 1280; render();">
-            </div>
-            <div class="form-group form-group-inline">
-                <label for="z-image-height-input">高度 (377:value)</label>
-                <input id="z-image-height-input" type="number" min="1" max="4096" value="${state.zImageHeight}" ${state.isGenerating ? 'disabled' : ''} onchange="state.zImageHeight = parseInt(this.value) || 720; render();">
-            </div>
-        </div>
-        <div class="form-row">
-            <div class="form-group form-group-inline">
-                <label for="z-image-batch-size-input">批次大小 (216:batch_size)</label>
-                <input id="z-image-batch-size-input" type="number" min="1" max="10" value="${state.batchSize}" ${state.isGenerating ? 'disabled' : ''} onchange="state.batchSize = parseInt(this.value) || 1; render();">
-            </div>
-            <div class="form-group form-group-inline">
-                <label for="z-image-seed-input">随机种子 (141:seed)</label>
-                <input id="z-image-seed-input" type="number" value="${state.zImageSeed}" ${state.isGenerating ? 'disabled' : ''} onchange="state.zImageSeed = parseInt(this.value) || 453236349928716; render();">
-            </div>
-        </div>
-    `;
-}
 
 // 渲染进度面板
 function renderProgressPanel() {
@@ -1028,9 +1340,9 @@ function renderSettingsTab() {
                 
                 <div class="form-group">
                     <label for="settings-api-endpoint-input">API 服务器地址</label>
-                    <input id="settings-api-endpoint-input" type="text" value="${state.apiEndpoint}" onchange="state.apiEndpoint = this.value; render();" placeholder="https://your-server.com:8443">
+                    <input id="settings-api-endpoint-input" type="text" value="${state.apiEndpoint || ''}" oninput="state.apiEndpoint = this.value;" onchange="handleEndpointInputChange(this);" placeholder="https://your-server.com:8443">
                     <div class="help-text-medium">
-                        此配置将应用于所有 API 类型。修改后请点击"保存"按钮保存配置。
+                        此配置将应用于所有 API 类型。修改后请点击"保存"按钮保存配置。系统会自动修正地址格式（移除路径，添加协议等）。
                     </div>
                 </div>
 
@@ -1039,7 +1351,6 @@ function renderSettingsTab() {
                     <select id="settings-api-type-select" value="${state.apiType}" onchange="state.apiType = this.value; render();">
                         <option value="07Nunchaku-Qwenimage" ${state.apiType === '07Nunchaku-Qwenimage' ? 'selected' : ''}>07Nunchaku-Qwenimage</option>
                         <option value="qwenbg" ${state.apiType === 'qwenbg' ? 'selected' : ''}>qwenbg</option>
-                        <option value="Z-Image" ${state.apiType === 'Z-Image' ? 'selected' : ''}>Z-Image</option>
                     </select>
                     <div class="help-text-medium">
                         选择默认使用的 API 类型。
@@ -1049,8 +1360,9 @@ function renderSettingsTab() {
                 <div class="info-box-large">
                     <div class="info-box-title">说明：</div>
                     <div class="info-box-item">• API 服务器地址是所有 API 类型共用的配置</div>
-                    <div class="info-box-item">• 配置保存后，下次打开插件会自动加载</div>
-                    <div class="info-box-item">• 当前保存的地址：<span class="info-box-highlight">${state.apiEndpoint || '未设置'}</span></div>
+                    <div class="info-box-item">• 配置将保存到本地 JSON 文件（autodl-config.json）</div>
+                    <div class="info-box-item">• 配置保存后，下次打开插件会自动从 JSON 文件加载</div>
+                    <div class="info-box-item">• 当前配置的地址：<span class="info-box-highlight">${state.apiEndpoint || '未设置'}</span></div>
                 </div>
 
                 <div class="button-group-bottom">
@@ -1085,7 +1397,9 @@ try {
                     panelRoot.appendChild(rootDiv);
 
                     if (!window.__autodlMounted) {
-                        init();
+                        init().catch(error => {
+                            console.error('初始化失败:', error);
+                        });
                         window.__autodlMounted = true;
                     }
                 },
@@ -1121,7 +1435,9 @@ try {
         return d;
     })();
     if (!window.__autodlMounted) {
-        init();
+        init().catch(error => {
+            console.error('初始化失败:', error);
+        });
         window.__autodlMounted = true;
     }
 }
