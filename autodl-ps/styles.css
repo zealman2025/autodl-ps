@@ -522,6 +522,7 @@ button:disabled {
     align-items: center;
     cursor: pointer;
     user-select: none;
+    color: inherit; /* 重置label的默认颜色 */
 }
 
 .checkbox-label.disabled {
@@ -542,13 +543,13 @@ button:disabled {
 
 .checkbox-label span {
     font-size: 12px;
-    color: var(--uxp-host-text-color, #ffffff);
+    color: #ffffff !important;
     line-height: 1.2;
     font-weight: 500;
 }
 
 .checkbox-label.disabled span {
-    color: var(--uxp-host-text-color-secondary, #a0a0a0);
+    color: var(--uxp-host-text-color-secondary, #a0a0a0) !important;
 }
 
 /* TAB标签文本 */

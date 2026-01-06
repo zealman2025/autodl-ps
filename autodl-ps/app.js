@@ -2011,14 +2011,13 @@ function renderCustomApisSection() {
             
             ${state.customApis.map((api, index) => `
                 <div class="custom-api-item" data-api-id="${api.id}" style="margin-bottom: 16px; padding: 12px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <strong>${api.name || '未命名API'}</strong>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="font-size: 11px; color: rgba(255,255,255,0.7);">
+                            Workflow ID: ${api.workflow_id || '未设置'}
+                        </div>
                         <div>
                             <button data-action="deleteCustomApi" data-api-id="${api.id}" style="width: auto; padding: 4px 8px; background-color: #d32f2f; font-size: 11px;">删除</button>
                         </div>
-                    </div>
-                    <div style="font-size: 11px; color: rgba(255,255,255,0.7);">
-                        Workflow ID: ${api.workflow_id || '未设置'} | 参数数量: ${api.input_fields ? api.input_fields.length : 0}
                     </div>
                 </div>
             `).join('')}
@@ -2029,9 +2028,11 @@ function renderCustomApisSection() {
                 <div class="help-text-medium" style="margin-top: 4px;">
                     粘贴包含 workflow_id 和 input_values 的JSON代码，系统会自动解析字段类型。
                 </div>
-                <button data-action="addCustomApi" style="width: auto; padding: 6px 12px; margin-top: 8px;">
-                    + 添加自定义API
-                </button>
+                <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+                    <button data-action="addCustomApi" style="width: auto; padding: 6px 12px; white-space: nowrap;">
+                        保存API
+                    </button>
+                </div>
             </div>
         </div>
     `;
