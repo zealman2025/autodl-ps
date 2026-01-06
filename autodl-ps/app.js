@@ -560,7 +560,6 @@ let state = {
     nodeProgress: 0,
     currentNode: '准备中...',
     showProgress: false,
-    apiServerStatus: 'unknown', // 'online', 'offline', 'checking', 'unknown'
     comfyuiStatus: 'unknown', // 'online', 'offline', 'checking', 'unknown'
     isCheckingStatus: false, // 是否正在检查状态，避免重复检查
     editingCustomApi: null, // 正在编辑的自定义API ID
@@ -614,9 +613,9 @@ async function init() {
     initAPI();
     initPhotoshopUtils();
 
-    // 检查 API 服务器状态
+    // 检查 ComfyUI 状态
     if (state.apiEndpoint && state.apiEndpoint.trim()) {
-        checkApiServerStatus();
+        checkComfyUIStatus();
     }
 
     // 渲染界面
@@ -718,12 +717,18 @@ function initAPI() {
 
 // 检查 ComfyUI 状态
 async function checkComfyUIStatus(skipRender = false) {
+    // 如果正在检查中，跳过重复检查
+    if (state.isCheckingStatus) {
+        return;
+    }
+
     if (!state.apiEndpoint || !state.apiEndpoint.trim()) {
         state.comfyuiStatus = 'unknown';
         if (!skipRender) render();
         return;
     }
 
+    state.isCheckingStatus = true;
     state.comfyuiStatus = 'checking';
     if (!skipRender) render();
 
@@ -812,90 +817,12 @@ async function checkComfyUIStatus(skipRender = false) {
     } catch (error) {
         // 任何错误都视为离线
         state.comfyuiStatus = 'offline';
+    } finally {
+        state.isCheckingStatus = false;
     }
     if (!skipRender) render();
 }
 
-// 检查 API 服务器状态
-async function checkApiServerStatus(skipInitialRender = false) {
-    // 如果正在检查中，跳过重复检查
-    if (state.isCheckingStatus) {
-        return;
-    }
-
-    if (!state.apiEndpoint || !state.apiEndpoint.trim()) {
-        state.apiServerStatus = 'unknown';
-        state.comfyuiStatus = 'unknown';
-        if (!skipInitialRender) render();
-        return;
-    }
-
-    state.isCheckingStatus = true;
-    state.apiServerStatus = 'checking';
-    if (!skipInitialRender) render();
-
-    try {
-        const baseUrl = state.apiEndpoint.replace(/\/$/, '');
-        // 尝试访问 API 的健康检查端点或根路径
-        const healthCheckUrl = `${baseUrl}/api/health`;
-        const rootUrl = `${baseUrl}/`;
-        
-        // 使用较短的超时时间（3秒）
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-        let isOnline = false;
-
-        try {
-            // 先尝试健康检查端点
-            const response = await fetch(healthCheckUrl, {
-                method: 'GET',
-                signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-            
-            if (response.ok || response.status < 500) {
-                isOnline = true;
-            }
-        } catch (e) {
-            clearTimeout(timeoutId);
-            // 如果健康检查失败，尝试根路径
-            try {
-                const rootController = new AbortController();
-                const rootTimeoutId = setTimeout(() => rootController.abort(), 3000);
-                const rootResponse = await fetch(rootUrl, {
-                    method: 'GET',
-                    signal: rootController.signal
-                });
-                clearTimeout(rootTimeoutId);
-                
-                if (rootResponse.ok || rootResponse.status < 500) {
-                    isOnline = true;
-                }
-            } catch (rootError) {
-                // 两个请求都失败，服务器离线
-                isOnline = false;
-            }
-        }
-
-        state.apiServerStatus = isOnline ? 'online' : 'offline';
-        
-        // 如果 API 服务器在线，检查 ComfyUI 状态（跳过中间渲染，最后统一渲染）
-        if (isOnline) {
-            await checkComfyUIStatus(true); // 跳过中间渲染
-        } else {
-            state.comfyuiStatus = 'offline';
-        }
-    } catch (error) {
-        // 任何错误都视为离线
-        state.apiServerStatus = 'offline';
-        state.comfyuiStatus = 'offline';
-    } finally {
-        state.isCheckingStatus = false;
-    }
-    // 只在最终状态确定后渲染一次
-    render();
-}
 
 // 初始化 Photoshop 工具实例
 function initPhotoshopUtils() {
@@ -1533,10 +1460,9 @@ async function saveSettings() {
         // 重新初始化 API（这会使用更新后的 state）
         initAPI();
         
-        // 检查 API 服务器状态（异步执行，不阻塞UI）
-        // 使用 skipInitialRender=false 来显示"checking"状态，但最终只渲染一次
-        checkApiServerStatus(false).catch(err => {
-            console.error('检查API状态失败:', err);
+        // 检查 ComfyUI 状态（异步执行，不阻塞UI）
+        checkComfyUIStatus(false).catch(err => {
+            console.error('检查ComfyUI状态失败:', err);
         });
         
         setTimeout(() => {
@@ -1578,12 +1504,12 @@ function setActiveTab(tab) {
             state.statusType = 'processing';
         }
         
-        // 切换到首页时检查 API 服务器状态和 ComfyUI 状态
+        // 切换到首页时检查 ComfyUI 状态
         // 但如果正在检查中，跳过重复检查
         if (state.apiEndpoint && state.apiEndpoint.trim() && !state.isCheckingStatus) {
             // 异步检查状态，不阻塞渲染
-            checkApiServerStatus(true).catch(err => {
-                console.error('检查API状态失败:', err);
+            checkComfyUIStatus(true).catch(err => {
+                console.error('检查ComfyUI状态失败:', err);
             });
         }
     } else if (tab === 'logs') {
@@ -1810,10 +1736,6 @@ function renderMainTab() {
             <div class="container">
                 <div class="form-group">
                     <div class="status-row">
-                        <div class="status-item">
-                            <span class="status-label">服务器：</span>
-                            <span class="api-status-indicator ${state.apiServerStatus}"></span>
-                        </div>
                         <div class="status-item">
                             <span class="status-label">ComfyUI：</span>
                             <span class="api-status-indicator ${state.comfyuiStatus}"></span>
