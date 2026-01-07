@@ -171,14 +171,22 @@ class AutoDLAPI {
             }
             const headers = {};
             if (contentType) headers['Content-Type'] = contentType;
+            
+            // 使用构造函数中设置的上传端点
             this.addLog('info', `尝试上传到: ${this.uploadEndpoint}`);
+            this.addLog('info', `Base URL: ${this.baseUrl}`);
+            
             const response = await fetch(this.uploadEndpoint, { method: 'POST', headers, body, signal });
             if (!response.ok) {
                 const errorText = await response.text();
                 this.addLog('error', `上传失败: ${response.status} ${response.statusText}`);
-                this.addLog('error', `错误详情: ${errorText}`);
+                this.addLog('error', `错误详情: ${errorText.substring(0, 500)}`);
+                this.addLog('error', `请求URL: ${this.uploadEndpoint}`);
+                this.addLog('error', `Base URL: ${this.baseUrl}`);
+                this.addLog('error', `Content-Type: ${contentType || 'multipart/form-data (FormData)'}`);
                 throw new Error(`上传失败: ${response.status} ${response.statusText}`);
             }
+            
             const result = await response.json();
             let uploadedFilename = filename;
             if (result.name) {
@@ -554,7 +562,7 @@ let state = {
     logs: [],
     status: '',
     statusType: 'processing',
-    openInNewDoc: false,
+    openInNewDoc: true,
     activeTab: 'main',
     workflowProgress: 0,
     nodeProgress: 0,
@@ -1060,14 +1068,25 @@ async function saveSettingsToFile() {
         const dataFolder = await fs.getDataFolder();
         console.log('数据文件夹获取成功');
         
+        // 确保 apiEndpoint 不为空才保存
+        const apiEndpointToSave = (state.apiEndpoint && state.apiEndpoint.trim()) ? state.apiEndpoint.trim() : '';
+        
         const configData = {
-            apiEndpoint: state.apiEndpoint || '',
+            apiEndpoint: apiEndpointToSave,
             apiType: state.defaultApiType || '07Nunchaku-Qwenimage', // 保存默认API类型，不是当前使用的
             customApis: state.customApis || [], // 保存自定义API配置
             timestamp: Date.now()
         };
         
+        // 如果 apiEndpoint 为空，记录警告但不阻止保存（允许用户清空配置）
+        if (!apiEndpointToSave) {
+            console.warn('警告：保存的 API 端点为空');
+        }
+        
         console.log('准备写入配置数据:', configData);
+        console.log('保存的 apiEndpoint 值:', configData.apiEndpoint);
+        console.log('保存的 apiEndpoint 类型:', typeof configData.apiEndpoint);
+        console.log('保存的 apiEndpoint 长度:', configData.apiEndpoint ? configData.apiEndpoint.length : 0);
         const jsonContent = JSON.stringify(configData, null, 2);
         console.log('JSON 内容:', jsonContent);
         
@@ -1113,12 +1132,22 @@ async function loadSettingsFromFile() {
             console.log('读取配置文件内容:', content);
             const configData = JSON.parse(content);
             console.log('解析后的配置数据:', configData);
+            console.log('配置文件中的 apiEndpoint 值:', configData.apiEndpoint);
+            console.log('配置文件中的 apiEndpoint 类型:', typeof configData.apiEndpoint);
+            console.log('配置文件中的 apiEndpoint 是否为空:', !configData.apiEndpoint || String(configData.apiEndpoint).trim() === '');
             
             let loaded = false;
-            if (configData.apiEndpoint !== undefined && configData.apiEndpoint !== null) {
-                state.apiEndpoint = String(configData.apiEndpoint).trim();
-                console.log('加载 API 端点:', state.apiEndpoint);
+            if (configData.apiEndpoint !== undefined && configData.apiEndpoint !== null && String(configData.apiEndpoint).trim() !== '') {
+                const trimmedEndpoint = String(configData.apiEndpoint).trim();
+                state.apiEndpoint = trimmedEndpoint;
+                console.log('成功加载 API 端点:', state.apiEndpoint);
+                console.log('加载后的 apiEndpoint 长度:', state.apiEndpoint.length);
                 loaded = true;
+            } else if (configData.apiEndpoint !== undefined && configData.apiEndpoint !== null) {
+                console.log('配置文件中的 API 端点为空，跳过加载');
+                console.log('当前 state.apiEndpoint 保持为:', state.apiEndpoint);
+            } else {
+                console.log('配置文件中没有 apiEndpoint 字段');
             }
             if (configData.apiType && (configData.apiType === '07Nunchaku-Qwenimage' || configData.apiType === 'qwenbg' || (configData.apiType.startsWith && configData.apiType.startsWith('custom_')))) {
                 state.defaultApiType = configData.apiType;
@@ -1198,112 +1227,154 @@ function isComfyUIAddress(url) {
     return false;
 }
 
-// 解析API代码，提取workflow_id和input_values字段
+// 解析API代码，从输入内容中强行提取 workflow_id 和 input_values 字段
 function parseApiCode(apiCode) {
+    if (!apiCode || typeof apiCode !== 'string') {
+        throw new Error('输入内容为空');
+    }
+
+    const trimmedCode = apiCode.trim();
+    let workflowId = '';
+    let inputValues = {};
+
     try {
-        // 尝试解析JSON
-        let parsed;
-        if (typeof apiCode === 'string') {
-            parsed = JSON.parse(apiCode);
+        // --- 第一步：强行提取 workflow_id ---
+        const workflowIdMatch = trimmedCode.match(/['"]?workflow_id['"]?\s*:\s*['"]([^'"]+)['"]/i);
+        if (workflowIdMatch && workflowIdMatch[1]) {
+            workflowId = workflowIdMatch[1];
         } else {
-            parsed = apiCode;
+            // 尝试直接 JSON 解析（如果是标准格式）
+            try {
+                const temp = JSON.parse(trimmedCode);
+                if (temp.workflow_id) workflowId = temp.workflow_id;
+            } catch (e) {}
         }
-        
-        if (!parsed.workflow_id) {
-            throw new Error('缺少 workflow_id 字段');
+
+        // --- 第二步：强行提取参数列表 ---
+        let foundValues = false;
+
+        // 尝试1：定位 input_values 关键字之后的大括号块
+        const inputValuesMatch = trimmedCode.match(/['"]?input_values['"]?\s*:\s*/i);
+        if (inputValuesMatch) {
+            const startIndex = inputValuesMatch.index + inputValuesMatch[0].length;
+            const remaining = trimmedCode.substring(startIndex).trim();
+            if (remaining.startsWith('{')) {
+                // 大括号计数法提取
+                let count = 0;
+                let endPos = -1;
+                for (let i = 0; i < remaining.length; i++) {
+                    if (remaining[i] === '{') count++;
+                    else if (remaining[i] === '}') count--;
+                    if (count === 0) {
+                        endPos = i;
+                        break;
+                    }
+                }
+                const block = endPos !== -1 ? remaining.substring(0, endPos + 1) : remaining;
+                try {
+                    inputValues = JSON.parse(block);
+                    foundValues = true;
+                } catch (e) {
+                    // 如果 JSON 解析失败，尝试正则提取每个字段（应对漏掉逗号等情况）
+                    const fieldMatches = block.matchAll(/['"]([^'"]+)['"]\s*:\s*([^,}\s]+)/g);
+                    for (const fm of fieldMatches) {
+                        let val = fm[2].trim();
+                        // 去掉引号并尝试转为数字
+                        if (val.startsWith('"') || val.startsWith("'")) val = val.substring(1, val.length - 1);
+                        inputValues[fm[1]] = isNaN(val) ? val : parseFloat(val);
+                    }
+                    if (Object.keys(inputValues).length > 0) foundValues = true;
+                }
+            }
         }
-        
-        if (!parsed.input_values || typeof parsed.input_values !== 'object') {
-            throw new Error('缺少 input_values 字段或格式不正确');
+
+        // 尝试2：如果没有 input_values 关键字，但在全文中找到了大括号块
+        if (!foundValues) {
+            const firstBrace = trimmedCode.indexOf('{');
+            if (firstBrace !== -1) {
+                const block = trimmedCode.substring(firstBrace);
+                try {
+                    const temp = JSON.parse(block);
+                    inputValues = temp.input_values || temp;
+                    if (temp.workflow_id && !workflowId) workflowId = temp.workflow_id;
+                    foundValues = true;
+                } catch (e) {
+                    // 正则提取
+                    const fieldMatches = block.matchAll(/['"]([^'"]+)['"]\s*:\s*([^,}\s]+)/g);
+                    for (const fm of fieldMatches) {
+                        let val = fm[2].trim();
+                        if (val.startsWith('"') || val.startsWith("'")) val = val.substring(1, val.length - 1);
+                        inputValues[fm[1]] = isNaN(val) ? val : parseFloat(val);
+                    }
+                    if (Object.keys(inputValues).length > 0) foundValues = true;
+                }
+            }
         }
-        
-        const workflowId = parsed.workflow_id;
+
+        // --- 第三步：验证与组装 ---
+        if (!workflowId) throw new Error('未能识别到 workflow_id');
+        if (Object.keys(inputValues).length === 0) throw new Error('未能识别到任何参数字段');
+
+        // 清理 inputValues（如果它包含了 workflow_id 本身）
+        delete inputValues.workflow_id;
+
         const inputFields = [];
-        
-        // 解析input_values中的每个字段
-        for (const [key, value] of Object.entries(parsed.input_values)) {
-            let fieldType = 'text'; // 默认类型
-            let label = key;
+        for (const [key, value] of Object.entries(inputValues)) {
+            let fieldType = 'text';
             
-            // 根据字段名和值类型判断字段类型
+            // 提取原始字段名（从 "3:denoise" 提取出 "denoise"）
+            const fieldName = key.includes(':') ? key.split(':')[1] : key;
+            let label = fieldName; // 默认使用字段名作为标签
+            
+            // 识别逻辑
             if (key.includes(':image') || value === '[需要上传图片]' || (typeof value === 'string' && value.includes('image'))) {
-                fieldType = 'image';
-                label = '图像上传';
+                fieldType = 'image'; 
+                label = `图像上传 (${fieldName})`;
             } else if (key.includes(':seed') || key.includes(':Seed')) {
-                fieldType = 'seed';
-                label = '随机种子';
-            } else if (key.includes(':string') || key.includes(':String')) {
-                fieldType = 'string';
-                label = '文本输入';
-            } else if (key.includes(':text') || key.includes(':Text')) {
-                fieldType = 'text';
-                label = '文本输入';
+                fieldType = 'seed'; 
+                label = `随机种子 (${fieldName})`;
             } else if (key.includes(':value') || key.includes(':Value')) {
                 fieldType = 'value';
-                label = '数值';
+                label = fieldName; // 如果包含 value 关键字，直接用字段名
             } else if (key.includes(':width') || key.includes(':Width')) {
-                fieldType = 'width';
-                label = '宽度';
-            } else if (key.includes(':batch_size') || key.includes(':batchSize') || key.includes(':BatchSize')) {
-                fieldType = 'batch_size';
-                label = '批次大小';
+                fieldType = 'width'; 
+                label = `宽度 (${fieldName})`;
+            } else if (key.includes(':height') || key.includes(':Height')) {
+                fieldType = 'value'; // 高度作为普通数值
+                label = `高度 (${fieldName})`;
+            } else if (key.includes(':batch_size') || key.includes(':batchSize')) {
+                fieldType = 'batch_size'; 
+                label = `批次大小 (${fieldName})`;
             } else if (typeof value === 'number') {
-                // 如果是数字，判断是seed还是普通数值
-                if (key.toLowerCase().includes('seed')) {
-                    fieldType = 'seed';
-                    label = '随机种子';
-                } else {
-                    fieldType = 'value';
-                    label = '数值';
-                }
-            } else if (typeof value === 'string') {
-                // 如果是字符串，判断是否是图像占位符
-                if (value === '[需要上传图片]' || value.toLowerCase().includes('image')) {
-                    fieldType = 'image';
-                    label = '图像上传';
-                } else {
-                    fieldType = 'text';
-                    label = '文本输入';
+                if (key.toLowerCase().includes('seed')) { 
+                    fieldType = 'seed'; label = `随机种子 (${fieldName})`; 
+                } else { 
+                    fieldType = 'value'; 
+                    // 不再简单地写“数值”，而是保留字段名
+                    label = fieldName; 
                 }
             }
             
             let defaultVal = undefined;
             if (fieldType === 'seed' || fieldType === 'value' || fieldType === 'width' || fieldType === 'batch_size') {
-                if (typeof value === 'number') {
-                    // 数字类型，检查是否超过安全整数范围
-                    if (value > Number.MAX_SAFE_INTEGER || !Number.isSafeInteger(value)) {
-                        // 大数字使用字符串存储
-                        defaultVal = String(Math.floor(value));
-                    } else {
-                        defaultVal = Math.floor(value);
-                    }
-                } else if (typeof value === 'string' && value.trim() !== '') {
-                    // 字符串类型，检查是否是大数字
-                    const numValue = parseFloat(value);
-                    const strValue = value.trim();
-                    if (strValue.length > 15 || numValue > Number.MAX_SAFE_INTEGER || isNaN(numValue)) {
-                        // 大数字或无效数字，使用字符串（移除非数字字符，保留数字）
-                        defaultVal = strValue.replace(/[^0-9]/g, '') || undefined;
-                    } else {
-                        defaultVal = Math.floor(numValue) || 0;
-                    }
+                const strVal = String(value);
+                const numVal = parseFloat(strVal);
+                if (strVal.length > 15 || numVal > Number.MAX_SAFE_INTEGER || isNaN(numVal)) {
+                    defaultVal = strVal.replace(/[^0-9.]/g, '');
+                } else {
+                    // 保留小数，对于 denoise 等字段很重要
+                    defaultVal = numVal;
                 }
+            } else {
+                defaultVal = value;
             }
             
-            inputFields.push({
-                key: key,
-                type: fieldType,
-                label: label,
-                default_value: defaultVal
-            });
+            inputFields.push({ key, type: fieldType, label, default_value: defaultVal });
         }
         
-        return {
-            workflow_id: workflowId,
-            input_fields: inputFields
-        };
+        return { workflow_id: workflowId, input_fields: inputFields };
     } catch (error) {
-        throw new Error(`解析API代码失败: ${error.message}`);
+        throw new Error(`提取失败: ${error.message}。请确保粘贴的内容包含 "workflow_id" 及其后的参数。`);
     }
 }
 
@@ -2053,8 +2124,18 @@ function handleAddCustomApi() {
     }
     
     try {
+        // 检查 JSON 格式是否完整（用于后续显示警告）
+        const openBraces = (apiCode.match(/\{/g) || []).length;
+        const closeBraces = (apiCode.match(/\}/g) || []).length;
+        const wasIncomplete = openBraces > closeBraces;
+        
         // 解析API代码
         const parsed = parseApiCode(apiCode);
+        
+        // 如果 JSON 格式不完整但解析成功，显示警告
+        if (wasIncomplete) {
+            addLog('warning', '检测到JSON格式不完整（缺少闭合大括号），已自动补全');
+        }
         
         // 检查workflow_id是否已存在
         const existingApi = state.customApis.find(api => api.workflow_id === parsed.workflow_id);
